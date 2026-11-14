@@ -6,7 +6,7 @@
     <manufacturer>AGE Labs</manufacturer>
     <code/>
     <release_year>2015</release_year>
-    <description>For developers. Not a GR8NET: only the 24-bit counter of that card's controlled interrupt generator (special control registers 5FEAh-5FEDh in bank 0), usable as a 10 MHz or 3.58 MHz timer. No I/O ports, ROM, network, audio or interrupt.</description>
+    <description>For developers. Not a GR8NET: only the 24-bit counter of that card's controlled interrupt generator (5FEBh-5FEDh in page 1), always running at 3.58 MHz, usable as a timer. No control register, I/O ports, ROM, network, audio or interrupt.</description>
     <type>network</type>
   </info>
   <devices>

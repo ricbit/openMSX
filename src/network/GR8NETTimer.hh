@@ -3,21 +3,26 @@
 
 #include "MSXDevice.hh"
 
-#include "EmuTime.hh"
+#include "Clock.hh"
 
 #include <cstdint>
 
 namespace openmsx {
 
-/** Not a GR8NET: only that card's controlled interrupt generator, usable as
-  * a timer, without its interrupt. Meant for developers who need a fine
-  * clock to time other hardware.
-  *  - Special control registers 5FEA (control) and 5FEB-5FED (24-bit
-  *    counter), in bank 0 (4000h-5FFFh). All other memory reads FFh.
-  * Not emulated: the I/O ports (5Eh/5Fh, so no adapter identification), the
-  * ROM, the mapper, the network, the audio, the hardware interrupt (IGE)
-  * and its watchdog (WDE), and the Hz mode (HZP). See the GR8NET manual,
-  * section 11.5.1 (the generator).
+/** Not a GR8NET: only the 24-bit counter of that card's controlled interrupt
+  * generator (GR8NET manual, section 11.5.1), as a timer. Meant for
+  * developers who need a fine clock to time other hardware on a real MSX
+  * and in openMSX with the same code.
+  *  - The counter is read at 5FEBh (LSB), 5FECh and 5FEDh (MSB), in page 1.
+  *    Reading the LSB latches the other two bytes.
+  *  - It counts down at 3.579545 MHz (the Z80's clock), as the real one
+  *    does with CLS = 1, and wraps every 2^24 ticks.
+  *  - It always runs. Writes are ignored, so the control register (5FEAh)
+  *    and the period have no effect; on the real card software has to
+  *    start the counter (OP = 1, CLS = 1) with a period of 0.
+  * Everything else on the card is absent: the I/O ports (so no adapter
+  * identification), the generator's interrupt and its INT flag, the 10 MHz
+  * clock, the ROM, the mapper, the network and the audio.
   */
 class GR8NETTimer final : public MSXDevice
 {
@@ -28,7 +33,6 @@ public:
 
 	[[nodiscard]] byte readMem(uint16_t address, EmuTime time) override;
 	[[nodiscard]] byte peekMem(uint16_t address, EmuTime time) const override;
-	void writeMem(uint16_t address, byte value, EmuTime time) override;
 	[[nodiscard]] const byte* getReadCacheLine(uint16_t start) const override;
 	[[nodiscard]] byte* getWriteCacheLine(uint16_t start) override;
 
@@ -36,24 +40,11 @@ public:
 	void serialize(Archive& ar, unsigned version);
 
 private:
-	struct State {
-		uint32_t left; // ticks left in the current period
-		bool expired;  // a period ended since 'start'
-	};
-	[[nodiscard]] State calc(EmuTime time) const;
-	[[nodiscard]] uint32_t period() const;
-	void sync(EmuTime time);
+	[[nodiscard]] uint32_t getCounter(EmuTime time) const;
 
 private:
-	byte control;   // OP, HZP, WDE, IGE and CLS, as written
-	bool intFlag;   // INT: a period ended, up to 'start'
-	uint32_t latch; // the 24-bit period, latched on the MSB write
-	byte writeLow, writeMid;
-	byte readMid, readHigh; // latched on the LSB read
-
-	// 'counter' ticks were left in the current period at 'start'
-	EmuTime start = EmuTime::zero();
-	uint32_t counter;
+	Clock<3579545> clock;
+	uint32_t latch = 0; // the 24-bit count, latched on the LSB read
 };
 
 } // namespace openmsx
