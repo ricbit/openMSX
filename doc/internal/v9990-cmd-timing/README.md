@@ -17,14 +17,16 @@ Test machine: a Hotbit (MSX1, 3.58 MHz Z80) with a Tecnobytes PowerGraph
 (real V9990, 21.48 MHz crystal) and a GR8NET, NTSC, R#16 = 0.
 
 The openMSX files come from a Sharp HB-8000 with
-`-ext Panasonic_FS-FD1A -ext gr8net -ext video9000`, under MSX-DOS. The
+`-ext Panasonic_FS-FD1A -ext gr8net-timer -ext video9000`, under MSX-DOS. The
 output (718 kB) doesn't fit that machine's 720 kB disk, so the last
 configuration (B6) of each openMSX file comes from a second run of a
 build with only the last three modes (`sjasmplus -DTAIL`).
 
 Build the probe with sjasmplus (`sjasmplus 99timing.z80` writes
 `99TIMING.COM`). It is an MSX-DOS .COM program, takes about 25 minutes
-and writes `99TIMING.TXT`.
+and writes `99TIMING.TXT`. It finds the GR8NET's counter by putting each
+slot in page 1 and checking that it counts Z80 clocks (the `G` line is
+the slot found); it doesn't use the GR8NET's I/O ports.
 
 ## Method
 
@@ -142,14 +144,14 @@ Relative error of the median for the cases of 200 clocks or more:
 
 | Modes | Before: median (90th percentile) | After: median (90th percentile) |
 |-------|----------------------------------|---------------------------------|
-| P1 (1063 cases) | 9.4% (97%) | 0.4% (3.0%) |
-| P2 | 16.7% (103%) | 0.2% (2.2%) |
-| B1, B3, B7 | 2.3-10.5% (32-308%) | 0.4-2.1% (1.5-5.7%) |
-| B0, B2, B4 | 2.3-10.3% (51-235%) | 1.5-2.9% (3.0-9.1%) |
-| B5, B6 (run as B7) | 6.9-14.1% (30-287%) | 2.9-6.5% (9-15%) |
+| P1 (1063 cases) | 9.4% (97%) | 0.4% (2.9%) |
+| P2 | 16.7% (103%) | 0.3% (1.4%) |
+| B1, B3, B7 | 2.3-10.3% (32-303%) | 0.5-2.2% (1.5-5.0%) |
+| B0, B2, B4 | 2.3-10.3% (51-235%) | 1.5-2.5% (3.3-9.1%) |
+| B5, B6 (run as B7) | 6.9-14.1% (30-285%) | 2.9-6.5% (9-15%) |
 
 - The start sweeps differ by 2 to 5 clocks on average after the change
-  (8 to 15 before).
+  (8 to 16 before).
 - The LINE readback: all 16 rows equal after the change (11 before).
 
 ## Not matched, not known

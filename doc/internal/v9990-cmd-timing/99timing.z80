@@ -2,7 +2,7 @@
 ; with a GR8NET's 24-bit counter. MSX-DOS .COM (99TIMING.COM, MSX-DOS 1 or
 ; 2, MSX1-safe); writes 99TIMING.TXT on the current drive: 718 kB (8141
 ; lines), so not a 720 kB floppy. Needs a V9990 (ports 60h-6Fh) and a
-; GR8NET (adapter #0). About 25 minutes (1460 s in openMSX); a dot on the
+; GR8NET (found by a slot search). About 25 minutes (1460 s in openMSX); a dot on the
 ; console for each case.
 ;
 ; The clock: the GR8NET's controlled interrupt generator (GR8NET manual,
@@ -91,8 +91,6 @@ MSX_CTRL        equ     99h
 RG1SAV          equ     0F3E0h          ; the BIOS's copy of the VDP's R#1
 IE0             equ     20h
 
-G_SEL           equ     5Eh
-G_DATA          equ     5Fh
 REG_CTL         equ     5FEAh           ; generator control
 REG_CNT         equ     5FEBh           ; counter LSB, MID, MSB
 CTL_OP          equ     01h
@@ -102,6 +100,8 @@ CTL_CLS         equ     20h             ; 3.579545 MHz
 BDOS            equ     0005h
 ENASLT          equ     0024h
 RAMAD1          equ     0F342h          ; page 1's RAM slot (MSX-DOS)
+EXPTBL          equ     0FCC1h          ; bit 7: the primary slot is expanded
+GD_N            equ     2000            ; the slot search's delay, 28 clocks each
 
 NRUN            equ     6               ; samples of a plain case
 NRUNP           equ     4               ; samples of each sweep step
@@ -985,45 +985,130 @@ VI_LP:
         jr      VI_LP
 
 ; ---- the GR8NET ------------------------------------------------------
-; Z if adapter #0 answers "GR8N"; SLOT = its slot ID.
+; Z if the counter was found; SLOT = its slot ID (RDSLT format). The I/O
+; ports (5Eh/5Fh) are not used: every slot, and every subslot of the
+; expanded ones, is put in page 1 in turn and must count Z80 clocks.
 G_DETECT:
-        in      a,(G_SEL)
-        ld      (SAVE5E),a
-        cp      0FFh
-        jr      nz,GD_1
-        xor     a                       ; none answered: DAID 0
-GD_1:
-        and     30h                     ; keep DAID, SAID = 0
-        ld      (SEL0),a
-        out     (G_SEL),a               ; register 0 (restarts the text)
-        ld      hl,TXT_GR8N
-        ld      b,4
-GD_LP:
-        in      a,(G_DATA)
-        cp      (hl)
-        jr      nz,GD_OUT
-        inc     hl
-        djnz    GD_LP
-        ld      a,(SEL0)
-        or      1
-        out     (G_SEL),a
-        in      a,(G_DATA)
-        ld      (SLOT),a
-        cp      0FFh
-        jr      z,GD_BAD
+        di
         xor     a
-        jr      GD_OUT
-GD_BAD:
-        or      a                       ; NZ
-GD_OUT:
-        push    af
-        ld      a,(SAVE5E)
-        cp      0FFh
-        jr      nz,GD_R
-        ld      a,(SEL0)
-GD_R:
-        out     (G_SEL),a
-        pop     af
+        ld      (GD_PRIM),a
+GD_PLP:
+        ld      a,(GD_PRIM)
+        ld      e,a
+        ld      d,0
+        ld      hl,EXPTBL
+        add     hl,de
+        ld      a,(hl)
+        and     80h
+        or      e                       ; subslot 0
+GD_SLP:
+        ld      (SLOT),a
+        ld      h,40h
+        call    ENASLT
+        di
+        call    GD_PROBE
+        jr      z,GD_END
+        ld      a,(SLOT)
+        bit     7,a
+        jr      z,GD_NEXT               ; not expanded
+        add     a,4
+        bit     4,a
+        jr      z,GD_SLP                ; subslots 1-3
+GD_NEXT:
+        ld      a,(GD_PRIM)
+        inc     a
+        ld      (GD_PRIM),a
+        cp      4
+        jr      nz,GD_PLP
+        ld      a,0FFh
+        ld      (SLOT),a
+GD_END:
+        ld      a,(RAMAD1)
+        ld      h,40h
+        call    ENASLT
+        ei
+        ld      a,(SLOT)
+        inc     a
+        jr      z,GD_NONE
+        xor     a
+        ret
+GD_NONE:
+        inc     a                       ; NZ
+        ret
+
+; Z if page 1 has the counter: started at 3.579545 MHz and read three
+; times, GD_N then 2*GD_N delay loops apart, the second interval is
+; 28*GD_N ticks longer than the first, give or take 2 (the rest of the
+; two intervals is the same code). RAM or ROM reads the same three times.
+; A slot that fails gets its four bytes written back (it may be RAM).
+GD_PROBE:
+        ld      hl,REG_CTL
+        ld      de,GD_SAVE
+        ld      bc,4
+        ldir
+        ld      a,CTL_RST
+        ld      (REG_CTL),a
+        xor     a
+        ld      (REG_CNT),a
+        ld      (REG_CNT+1),a
+        ld      (REG_CNT+2),a
+        ld      a,CTL_RST+CTL_OP+CTL_CLS
+        ld      (REG_CTL),a
+        ld      hl,GD_C0
+        call    GD_READ
+        ld      bc,GD_N
+        call    GD_DELAY
+        ld      hl,GD_C1
+        call    GD_READ
+        ld      bc,GD_N*2
+        call    GD_DELAY
+        ld      hl,GD_C2
+        call    GD_READ
+        ; (C1 - C2) - (C0 - C1), 16 bits: the counter counts down
+        ld      hl,(GD_C1)
+        add     hl,hl
+        ld      de,(GD_C2)
+        and     a
+        sbc     hl,de
+        ld      de,(GD_C0)
+        and     a
+        sbc     hl,de
+        ld      de,28*GD_N-2
+        and     a
+        sbc     hl,de
+        ld      a,h
+        and     a
+        jr      nz,GD_NO
+        ld      a,l
+        cp      5
+        jr      nc,GD_NO
+        ld      a,CTL_RST               ; stopped
+        ld      (REG_CTL),a
+        xor     a
+        ret
+GD_NO:
+        ld      hl,GD_SAVE
+        ld      de,REG_CTL
+        ld      bc,4
+        ldir
+        or      1                       ; NZ
+        ret
+
+; (HL) = the counter's low 16 bits (the LSB read latches the rest)
+GD_READ:
+        ld      a,(REG_CNT)
+        ld      (hl),a
+        inc     hl
+        ld      a,(REG_CNT+1)
+        ld      (hl),a
+        ret
+
+; BC iterations of 28 clocks
+GD_DELAY:
+        dec     bc
+        ld      a,b
+        or      c
+        jp      nz,GD_DELAY
         ret
 
 ; ---- output ----------------------------------------------------------
@@ -1735,8 +1820,6 @@ CONFIGS:
         CFGB    0A4h, 41h, 0                            ; B6 (C25M)
         db      0FFh
 
-TXT_GR8N:
-        db      "GR8N"
 TXT_HEAD:
         db      "# 99TIMING v2: V9990 command times, Z80 clocks (3.579545 MHz)", 0Dh, 0Ah
         db      "# name env D SX SY DX DY NX NY ARG LOP WM FC BC OP : samples", 0Dh, 0Ah
@@ -1752,7 +1835,7 @@ TXT_END:
 MSG_HELLO:
         db      "99TIMING: V9990 command times -> 99TIMING.TXT", 0Dh, 0Ah, "$"
 MSG_NOG:
-        db      "GR8NET #0 not found", 0Dh, 0Ah, "$"
+        db      "GR8NET timer not found", 0Dh, 0Ah, "$"
 MSG_NOFILE:
         db      "Cannot create 99TIMING.TXT", 0Dh, 0Ah, "$"
 MSG_DONE:
@@ -1762,8 +1845,11 @@ FCB:
         db      0, "99TIMINGTXT"
         ds      25
 
-SAVE5E:         db      0
-SEL0:           db      0
+GD_PRIM:        db      0
+GD_SAVE:        ds      4
+GD_C0:          dw      0
+GD_C1:          dw      0
+GD_C2:          dw      0
 SLOT:           db      0
 CFGN:           db      0
 CFGP:           dw      0
