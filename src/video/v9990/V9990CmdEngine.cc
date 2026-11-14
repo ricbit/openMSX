@@ -27,7 +27,7 @@
 
 namespace openmsx {
 
-// ---- Command timing from VRAM accesses -----------------------------------
+// Command timing from VRAM accesses.
 //
 // Measured on a real V9990 in every display mode but with the 25 MHz
 // crystal (doc/internal/v9990-cmd-timing). The command engine works on
@@ -48,67 +48,95 @@ namespace openmsx {
 // clock: all its times are 1.555 times longer.
 //
 // The time unit here is 1/5 of a UC tick (1/60 of a Z80 clock). Tables are
-// indexed by P1, P2, 2 bpp, 4 bpp, 8 bpp, 16 bpp.
+// indexed by the engine's mode: P1, P2, 2 bpp, 4 bpp, 8 bpp, 16 bpp.
 namespace Tm {
-	static constexpr int SUB = 5;
-	using Clk = Clock<V9990DisplayTiming::UC_TICKS_PER_SECOND * SUB>;
-	static constexpr int64_t LINE   = V9990DisplayTiming::UC_TICKS_PER_LINE * SUB;
-	static constexpr int64_t ACTIVE = 2048 * SUB; // 256 dots of P1
-	static constexpr int     SLOTS  = 48;         // in the active part
-	// The first active slot, from the end of openMSX's left border. Measured
-	// against the line interrupt: the slots start 12 clocks before it.
-	static constexpr int64_t FIRST_SLOT = -3240;
-	// P1, P2: horizontal blank, from the end of the active part.
-	static constexpr int64_t SPRITES_ON_START  = 1281; // 21.35 clocks
-	static constexpr int64_t SPRITES_ON_LEN    =   60; //  1 clock: one word
-	static constexpr int64_t SPRITES_OFF_START =    0;
-	static constexpr int64_t SPRITES_OFF_LEN   = 2670; // 44.5 clocks
-	// Bitmap modes: the blocked stretch ends 5 clocks before the first
-	// slot's place. Its length: cursor on, cursor off.
-	static constexpr int64_t BLOCK_END = 300;
-	static constexpr std::array<int64_t, 2> BLOCK_LEN          = {1296, 204};
-	static constexpr std::array<int64_t, 2> BLOCK_LEN_OVERSCAN = {1710, 258};
+enum : unsigned { P1, P2, BPP2, BPP4, BPP8, BPP16 };
 
-	using T6 = std::array<int, 6>;
-	static constexpr T6 PIXELS_PER_WORD = {2, 4, 8, 4, 2, 1};
-	// From one access to the engine's next.
-	static constexpr T6 ACCESS = {42, 41, 41, 41, 41, 41}; // 0.70 clocks
-	// From the write to R#52 to the first step.
-	static constexpr int LATENCY      = 168; // 2.8 clocks
-	static constexpr int LATENCY_PSET = 234; // 3.9 clocks
-	// Extra time at the start of each row. In P1 a row of one pixel takes
-	// less.
-	static constexpr T6 ROW_LMMV = {121, 40,  0, 36, 82,  82};
-	static constexpr T6 ROW_LMMM = {153, 72, 24, 70, 71, 149};
-	static constexpr int ROW_LMMV_1 =  80;
-	static constexpr int ROW_LMMM_1 =  74;
-	static constexpr int ROW_BMLX_P1 = 150;
-	// Extra time for each word, on top of its two accesses.
-	static constexpr T6 WORD_LMMV = { 0, 44, 104, 42,  1,  1};
-	static constexpr T6 WORD_LMMM = {11, 15,  49,  8,  8,  8}; // destination word
-	static constexpr T6 WORD_CMMM = { 6, 26,  67, 23,  7,  4}; // destination word
-	static constexpr T6 WORD_SRCH = {76, 79, 105, 79, 79, 79};
-	// LMMM with source and destination at different places in their words:
-	// for each pixel.
-	static constexpr T6 SHIFT_LMMM = {29, 11, 4, 11, 9, 0};
-	// BMLL with source and destination bytes in different chips: for each
-	// byte.
-	static constexpr int CROSS_BMLL = 37;
-	// Extra time for each linear byte.
-	static constexpr T6 BYTE_BMXL = {20, 7, 24, 4, 4, 4};
-	static constexpr T6 BYTE_BMLX = {44, 7, 24, 4, 4, 4};
-	static constexpr T6 BYTE_BMLL = { 5, 7,  4, 4, 4, 4};
-	// Extra time for each pixel.
-	static constexpr T6 PIXEL_LINE = {76, 78, 78, 78, 78, 78};
+static constexpr int SUB = 5;
+using Clk = Clock<V9990DisplayTiming::UC_TICKS_PER_SECOND * SUB>;
+static constexpr int64_t LINE   = V9990DisplayTiming::UC_TICKS_PER_LINE * SUB;
+static constexpr int64_t ACTIVE = 2048 * SUB; // 256 dots of P1
+static constexpr int     SLOTS  = 48;         // in the active part
+// The first active slot, from the end of openMSX's left border. Measured
+// against the line interrupt: the slots start 12 clocks before it.
+static constexpr int64_t FIRST_SLOT = -3240;
+// P1, P2: horizontal blank, from the end of the active part.
+static constexpr int64_t SPRITES_ON_START  = 1281; // 21.35 clocks
+static constexpr int64_t SPRITES_ON_LEN    =   60; //  1 clock: one word
+static constexpr int64_t SPRITES_OFF_START =    0;
+static constexpr int64_t SPRITES_OFF_LEN   = 2670; // 44.5 clocks
+// Bitmap modes: the blocked stretch ends 5 clocks before the first
+// slot's place. Its length: cursor on, cursor off.
+static constexpr int64_t BLOCK_END = 300;
+static constexpr std::array<int64_t, 2> BLOCK_LEN          = {1296, 204};
+static constexpr std::array<int64_t, 2> BLOCK_LEN_OVERSCAN = {1710, 258};
+// The engine's times in the overscan modes: 1.555 times longer.
+static constexpr int OVERSCAN_MUL = 311;
+static constexpr int OVERSCAN_DIV = 200;
 
-	[[nodiscard]] static constexpr EmuDuration dur(int64_t n) {
-		return Clk::duration(n);
-	}
-	// Position of active slot 'k', from the first.
-	[[nodiscard]] static constexpr int64_t slotPos(int64_t k) {
-		return (k * ACTIVE + (SLOTS - 1)) / SLOTS;
-	}
+using T6 = std::array<int, 6>;
+static constexpr T6 PIXELS_PER_WORD = {2, 4, 8, 4, 2, 1};
+// From one access to the engine's next.
+static constexpr T6 ACCESS = {42, 41, 41, 41, 41, 41}; // 0.70 clocks
+// From the write to R#52 to the first step.
+static constexpr int LATENCY      = 168; // 2.8 clocks
+static constexpr int LATENCY_PSET = 234; // 3.9 clocks
+// Extra time at the start of each row. In P1 a row of one pixel takes
+// less.
+static constexpr T6 ROW_LMMV = {121, 40,  0, 36, 82,  82};
+static constexpr T6 ROW_LMMM = {153, 72, 24, 70, 71, 149};
+static constexpr int ROW_LMMV_1 =  80;
+static constexpr int ROW_LMMM_1 =  74;
+static constexpr int ROW_BMLX_P1 = 150;
+// Extra time for each word, on top of its two accesses.
+static constexpr T6 WORD_LMMV = { 0, 44, 104, 42,  1,  1};
+static constexpr T6 WORD_LMMM = {11, 15,  49,  8,  8,  8}; // destination word
+static constexpr T6 WORD_CMMM = { 6, 26,  67, 23,  7,  4}; // destination word
+static constexpr T6 WORD_SRCH = {76, 79, 105, 79, 79, 79};
+// LMMM with source and destination at different places in their words:
+// for each pixel.
+static constexpr T6 SHIFT_LMMM = {29, 11, 4, 11, 9, 0};
+// BMLL with source and destination bytes in different chips: for each
+// byte.
+static constexpr int CROSS_BMLL = 37;
+// Extra time for each linear byte.
+static constexpr T6 BYTE_BMXL = {20, 7, 24, 4, 4, 4};
+static constexpr T6 BYTE_BMLX = {44, 7, 24, 4, 4, 4};
+static constexpr T6 BYTE_BMLL = { 5, 7,  4, 4, 4, 4};
+// Extra time for each pixel.
+static constexpr T6 PIXEL_LINE = {76, 78, 78, 78, 78, 78};
+
+// The least time that a pixel (BMLL: a byte) can take, in any mode. Used
+// for a lower bound on a command's end.
+static constexpr int64_t MIN_PIXEL_LMMV = 20;
+static constexpr int64_t MIN_PIXEL_COPY = 24; // LMMM, BMXL, BMLX
+static constexpr int64_t MIN_BYTE_BMLL  = 70;
+static constexpr int64_t MIN_PIXEL_LINE = 120;
+// The most of that time that one pending step can cover.
+static constexpr int64_t MAX_PENDING = 4 * MIN_PIXEL_LINE;
+
+// Extra time at the start of a row of 'nx' pixels.
+[[nodiscard]] static constexpr int rowLMMV(unsigned m, unsigned nx) {
+	return ((m == P1) && (nx == 1)) ? ROW_LMMV_1 : ROW_LMMV[m];
 }
+[[nodiscard]] static constexpr int rowLMMM(unsigned m, unsigned nx) {
+	return ((m == P1) && (nx == 1)) ? ROW_LMMM_1 : ROW_LMMM[m];
+}
+[[nodiscard]] static constexpr int rowBMLX(unsigned m) {
+	return (m == P1) ? ROW_BMLX_P1 : ROW_LMMM[m];
+}
+[[nodiscard]] static constexpr EmuDuration dur(int64_t n) {
+	return Clk::duration(n);
+}
+// Position of active slot 'k', from the first.
+[[nodiscard]] static constexpr int64_t slotPos(int64_t k) {
+	return (k * ACTIVE + (SLOTS - 1)) / SLOTS;
+}
+// 'a / b' rounded down, for a positive 'b'.
+[[nodiscard]] static constexpr int64_t divFloor(int64_t a, int64_t b) {
+	return (a >= 0) ? (a / b) : -((-a + b - 1) / b);
+}
+} // namespace Tm
 
 // Does the access model time the running command?
 bool V9990CmdEngine::accessTimed() const
@@ -119,7 +147,7 @@ bool V9990CmdEngine::accessTimed() const
 // An engine time in the current mode: longer in the overscan modes.
 int V9990CmdEngine::engineT(int t) const
 {
-	return vdp.isOverScan() ? (t * 311 / 200) : t;
+	return vdp.isOverScan() ? (t * Tm::OVERSCAN_MUL / Tm::OVERSCAN_DIV) : t;
 }
 
 // The first moment, not before 'request', that the engine gets a VRAM access.
@@ -139,16 +167,19 @@ EmuTime V9990CmdEngine::grantAccess(EmuTime request) const
 	int64_t bottom = top + 1 + ver.display;
 	int64_t base   = vdp.getLeftBorder() * Tm::SUB + Tm::FIRST_SLOT;
 	bool sprites = vdp.spritesEnabled();
-	bool patternMode = (cmdMode >> 4) < 2;
+	bool patternMode = timingMode() <= Tm::P2;
 
 	// Horizontal blank: P1, P2: the window [w0, w1) is free; bitmap modes:
 	// it is blocked.
-	int64_t w0, w1;
+	int64_t w0 = 0;
+	int64_t w1 = 0;
 	if (patternMode) {
-		w0 = Tm::ACTIVE + (sprites ? Tm::SPRITES_ON_START : Tm::SPRITES_OFF_START);
-		w1 = w0         + (sprites ? Tm::SPRITES_ON_LEN   : Tm::SPRITES_OFF_LEN);
+		w0 = Tm::ACTIVE + (sprites ? Tm::SPRITES_ON_START
+		                           : Tm::SPRITES_OFF_START);
+		w1 = w0 + (sprites ? Tm::SPRITES_ON_LEN : Tm::SPRITES_OFF_LEN);
 	} else {
-		const auto& len = vdp.isOverScan() ? Tm::BLOCK_LEN_OVERSCAN : Tm::BLOCK_LEN;
+		const auto& len = vdp.isOverScan() ? Tm::BLOCK_LEN_OVERSCAN
+		                                   : Tm::BLOCK_LEN;
 		w1 = Tm::LINE - Tm::BLOCK_END;
 		w0 = w1 - len[sprites ? 0 : 1];
 	}
@@ -156,10 +187,10 @@ EmuTime V9990CmdEngine::grantAccess(EmuTime request) const
 	// 'u' counts from the first active slot of the frame's line 0.
 	int64_t u = t - base;
 	while (true) {
-		int64_t line = (u >= 0) ? (u / Tm::LINE) : -((-u + Tm::LINE - 1) / Tm::LINE);
+		int64_t line = Tm::divFloor(u, Tm::LINE);
 		int64_t x = u - line * Tm::LINE;
-		int64_t frameLine = line % ver.cycle;
-		if (frameLine < 0) frameLine += ver.cycle;
+		int64_t frameLine =
+			line - Tm::divFloor(line, ver.cycle) * ver.cycle;
 		if ((frameLine < top) || (frameLine >= bottom)) break; // any time
 		if (!patternMode) {
 			if ((w0 <= x) && (x < w1)) u = line * Tm::LINE + w1;
@@ -171,7 +202,10 @@ EmuTime V9990CmdEngine::grantAccess(EmuTime request) const
 			u = line * Tm::LINE + Tm::slotPos(k);
 			break;
 		}
-		if (x < w0) { u = line * Tm::LINE + w0; break; }
+		if (x < w0) {
+			u = line * Tm::LINE + w0;
+			break;
+		}
 		if (x < w1) break;
 		u = (line + 1) * Tm::LINE; // the next line's first slot
 	}
@@ -182,7 +216,7 @@ EmuTime V9990CmdEngine::grantAccess(EmuTime request) const
 // false if that isn't all done by 'limit'; 'nextDone' is then when it will be.
 bool V9990CmdEngine::accessStep(EmuTime limit, unsigned accesses, int think)
 {
-	auto access = Tm::dur(engineT(Tm::ACCESS[cmdMode >> 4]));
+	auto access = Tm::dur(engineT(Tm::ACCESS[timingMode()]));
 	EmuTime t = engineTime + Tm::dur(engineT(think));
 	repeat(accesses, [&] {
 		t = grantAccess(t) + access;
@@ -207,14 +241,16 @@ bool V9990CmdEngine::step(EmuTime limit, bool timed,
 // Does the pixel at 'x' start a new VRAM word, going in direction 'dx'? 'n'
 // is the pixels in a word (in P1: the two pixels that share a byte in each
 // chip).
-[[nodiscard]] static constexpr bool wordStart(uint16_t x, uint16_t dx, unsigned n)
+[[nodiscard]] static constexpr bool wordStart(
+	uint16_t x, uint16_t dx, unsigned n)
 {
 	return (x & (n - 1)) == ((dx == 1) ? 0 : (n - 1));
 }
 
 // The words that the next 'count' pixels of a rectangle command start, from
 // column 'x' with 'anx' pixels left in the row and 'any' rows left.
-unsigned V9990CmdEngine::wordStarts(uint16_t x, uint16_t dx, unsigned n, unsigned count) const
+unsigned V9990CmdEngine::wordStarts(
+	uint16_t x, uint16_t dx, unsigned n, unsigned count) const
 {
 	unsigned result = 0;
 	uint16_t anx = ANX;
@@ -1234,14 +1270,14 @@ void V9990CmdEngine::executeLMMV(EmuTime limit)
 	uint16_t color = std::is_same_v<Mode, V9990P1>
 	               ? uint16_t((fgCol & 0xFF) * 0x0101) : fgCol;
 	const bool timed = accessTimed();
-	const unsigned m = cmdMode >> 4;
+	const unsigned m = timingMode();
 	const unsigned npw = Tm::PIXELS_PER_WORD[m];
 	while (true) {
 		bool rowStart = ANX == getWrappedNX();
 		bool word = rowStart || wordStart(DX, dx, npw);
-		if (!step(limit, timed, word ? 2 : 0,
-		          (word ? Tm::WORD_LMMV[m] : 0) +
-		          (!rowStart ? 0 : ((m == 0) && (NX == 1)) ? Tm::ROW_LMMV_1 : Tm::ROW_LMMV[m]))) break;
+		int think = (word ? Tm::WORD_LMMV[m] : 0) +
+		            (rowStart ? Tm::rowLMMV(m, NX) : 0);
+		if (!step(limit, timed, word ? 2 : 0, think)) break;
 		Mode::psetColor(vram, DX, DY, pitch, color, WM, lut, LOG, dataLatch);
 
 		DX += dx;
@@ -1349,18 +1385,18 @@ void V9990CmdEngine::executeLMMM(EmuTime limit)
 	uint16_t dy = (ARG & DIY) ? uint16_t(-1) : 1;
 	auto lut = Mode::getLogOpLUT(LOG);
 	const bool timed = accessTimed();
-	const unsigned m = cmdMode >> 4;
+	const unsigned m = timingMode();
 	const unsigned npw = Tm::PIXELS_PER_WORD[m];
 	// the pixel moves to another place in its word
 	const int shift = ((SX ^ DX) & (npw - 1)) ? Tm::SHIFT_LMMM[m] : 0;
 	while (true) {
 		bool rowStart = ANX == getWrappedNX();
-		bool dst = rowStart || wordStart(DX, dx, npw);
-		bool src_ = rowStart || wordStart(SX, dx, npw);
-		if (!step(limit, timed,
-		          (dst ? 2 : 0) + (src_ ? 2 : 0),
-		          (!rowStart ? 0 : ((m == 0) && (NX == 1)) ? Tm::ROW_LMMM_1 : Tm::ROW_LMMM[m]) +
-		          (dst ? Tm::WORD_LMMM[m] : 0) + shift)) break;
+		bool dstWord = rowStart || wordStart(DX, dx, npw);
+		bool srcWord = rowStart || wordStart(SX, dx, npw);
+		unsigned accesses = (dstWord ? 2 : 0) + (srcWord ? 2 : 0);
+		int think = (rowStart ? Tm::rowLMMM(m, NX) : 0) +
+		            (dstWord ? Tm::WORD_LMMM[m] : 0) + shift;
+		if (!step(limit, timed, accesses, think)) break;
 		auto src = Mode::point(vram, SX, SY, pitch);
 		src = Mode::shift(src, SX, DX);
 		Mode::pset(vram, DX, DY, pitch, src, WM, lut, LOG, dataLatch);
@@ -1463,14 +1499,14 @@ void V9990CmdEngine::executeCMMM(EmuTime limit)
 	uint16_t dy = (ARG & DIY) ? uint16_t(-1) : 1;
 	auto lut = Mode::getLogOpLUT(LOG);
 	const bool timed = accessTimed();
-	const unsigned m = cmdMode >> 4;
+	const unsigned m = timingMode();
 	const unsigned npw = Tm::PIXELS_PER_WORD[m];
 	while (true) {
 		// (a font word is 16 pixels: one access for each font byte)
-		bool dst = (ANX == getWrappedNX()) || wordStart(DX, dx, npw);
-		if (!step(limit, timed,
-		          (dst ? 2 : 0) + (bitsLeft ? 0 : 1),
-		          dst ? Tm::WORD_CMMM[m] : 0)) break;
+		bool dstWord = (ANX == getWrappedNX()) || wordStart(DX, dx, npw);
+		unsigned accesses = (dstWord ? 2 : 0) + (bitsLeft ? 0 : 1);
+		int think = dstWord ? Tm::WORD_CMMM[m] : 0;
+		if (!step(limit, timed, accesses, think)) break;
 		if (!bitsLeft) {
 			data = vram.readVRAMBx(srcAddress++);
 			bitsLeft = 8;
@@ -1516,7 +1552,7 @@ void V9990CmdEngine::executeBMXL<V9990CmdEngine::V9990Bpp16>(EmuTime limit)
 	const bool timed = accessTimed();
 
 	// a source word and a destination word
-	while (step(limit, timed, 4, Tm::WORD_LMMM[5])) {
+	while (step(limit, timed, 4, Tm::WORD_LMMM[Tm::BPP16])) {
 		auto src = uint16_t(vram.readVRAMBx(srcAddress + 0) +
 		                    vram.readVRAMBx(srcAddress + 1) * 256);
 		srcAddress += 2;
@@ -1544,15 +1580,15 @@ void V9990CmdEngine::executeBMXL(EmuTime limit)
 	uint16_t dy = (ARG & DIY) ? uint16_t(-1) : 1;
 	auto lut = Mode::getLogOpLUT(LOG);
 	const bool timed = accessTimed();
-	const unsigned m = cmdMode >> 4;
+	const unsigned m = timingMode();
 	const unsigned npw = Tm::PIXELS_PER_WORD[m];
 
 	while (true) {
 		// a source byte (half a word), and the destination words its
 		// pixels start
-		if (!step(limit, timed,
-		          1 + 2 * wordStarts(DX, dx, npw, Mode::PIXELS_PER_BYTE),
-		          Tm::BYTE_BMXL[m])) break;
+		unsigned accesses =
+			1 + 2 * wordStarts(DX, dx, npw, Mode::PIXELS_PER_BYTE);
+		if (!step(limit, timed, accesses, Tm::BYTE_BMXL[m])) break;
 		uint8_t d = vram.readVRAMBx(srcAddress++);
 		for (int i = 0; (ANY > 0) && (i < Mode::PIXELS_PER_BYTE); ++i) {
 			auto d2 = Mode::shift(d, i, DX);
@@ -1594,8 +1630,9 @@ void V9990CmdEngine::executeBMLX<V9990CmdEngine::V9990Bpp16>(EmuTime limit)
 	while (true) {
 		// a source word and a destination word
 		bool rowStart = ANX == getWrappedNX();
-		if (!step(limit, timed, 4,
-		          Tm::WORD_LMMM[5] + (rowStart ? Tm::ROW_LMMM[5] : 0))) break;
+		int think = Tm::WORD_LMMM[Tm::BPP16] +
+		            (rowStart ? Tm::ROW_LMMM[Tm::BPP16] : 0);
+		if (!step(limit, timed, 4, think)) break;
 		auto src = V9990Bpp16::point(vram, SX, SY, pitch);
 		vram.writeVRAMBx(dstAddress++, narrow_cast<uint8_t>(src & 0xFF));
 		vram.writeVRAMBx(dstAddress++, narrow_cast<uint8_t>(src >> 8));
@@ -1621,17 +1658,17 @@ void V9990CmdEngine::executeBMLX(EmuTime limit)
 	uint16_t dx = (ARG & DIX) ? uint16_t(-1) : 1;
 	uint16_t dy = (ARG & DIY) ? uint16_t(-1) : 1;
 	const bool timed = accessTimed();
-	const unsigned m = cmdMode >> 4;
+	const unsigned m = timingMode();
 	const unsigned npw = Tm::PIXELS_PER_WORD[m];
 
 	while (true) {
 		// the source words a byte's pixels start, and a destination
 		// byte (half a word)
 		bool rowStart = ANX == getWrappedNX();
-		if (!step(limit, timed,
-		          2 * wordStarts(SX, dx, npw, Mode::PIXELS_PER_BYTE) + 1,
-		          Tm::BYTE_BMLX[m] +
-		          (!rowStart ? 0 : (m == 0) ? Tm::ROW_BMLX_P1 : Tm::ROW_LMMM[m]))) break;
+		unsigned accesses =
+			2 * wordStarts(SX, dx, npw, Mode::PIXELS_PER_BYTE) + 1;
+		int think = Tm::BYTE_BMLX[m] + (rowStart ? Tm::rowBMLX(m) : 0);
+		if (!step(limit, timed, accesses, think)) break;
 		uint8_t d = 0;
 		for (auto i : xrange(Mode::PIXELS_PER_BYTE)) {
 			auto src = Mode::point(vram, SX, SY, pitch);
@@ -1689,7 +1726,7 @@ void V9990CmdEngine::executeBMLL<V9990CmdEngine::V9990Bpp16>(EmuTime limit)
 	const bool timed = accessTimed();
 	while (true) {
 		// a source word and a destination word
-		if (!step(limit, timed, 4, 2 * Tm::BYTE_BMLL[5])) break;
+		if (!step(limit, timed, 4, 2 * Tm::BYTE_BMLL[Tm::BPP16])) break;
 		if (nbBytes == 0) {
 			// the extra words' time, see startBMLL()
 			if (!--ANX) {
@@ -1724,13 +1761,13 @@ void V9990CmdEngine::executeBMLL(EmuTime limit)
 	// TODO DIX DIY?
 	auto lut = Mode::getLogOpLUT(LOG);
 	const bool timed = accessTimed();
-	const unsigned m = cmdMode >> 4;
+	const unsigned m = timingMode();
 	while (true) {
 		// Half a source word and half a destination word. It takes
 		// longer if the two bytes are in different chips.
-		if (!step(limit, timed, 2,
-		          Tm::BYTE_BMLL[m] +
-		          (((srcAddress ^ dstAddress) & 1) ? Tm::CROSS_BMLL : 0))) break;
+		bool cross = ((srcAddress ^ dstAddress) & 1) != 0;
+		int think = Tm::BYTE_BMLL[m] + (cross ? Tm::CROSS_BMLL : 0);
+		if (!step(limit, timed, 2, think)) break;
 		if (nbBytes == 0) {
 			// the extra 256 bytes' time, see startBMLL()
 			if (!--ANX) {
@@ -1781,7 +1818,7 @@ void V9990CmdEngine::executeLINE(EmuTime limit)
 	uint16_t TY = (ARG & DIY) ? uint16_t(-1) : 1;
 	auto lut = Mode::getLogOpLUT(LOG);
 	const bool timed = accessTimed();
-	const unsigned m = cmdMode >> 4;
+	const unsigned m = timingMode();
 	// Measured in P1: a line that passes the layer's edge goes on at the
 	// other edge of the same row, and takes its full length's time. (Not
 	// measured in the other modes: there it ends at the image's edge.)
@@ -1848,14 +1885,14 @@ void V9990CmdEngine::executeSRCH(EmuTime limit)
 	uint16_t TX = (ARG & DIX) ? uint16_t(-1) : 1;
 	bool AEQ = (ARG & NEQ) != 0;
 	const bool timed = accessTimed();
-	const unsigned m = cmdMode >> 4;
+	const unsigned m = timingMode();
 	const unsigned npw = Tm::PIXELS_PER_WORD[m];
 
 	while (true) {
 		// a source word, at the first pixel and at each word's start
 		bool word = (ASX == SX) || wordStart(ASX, TX, npw);
-		if (!step(limit, timed, word ? 2 : 0,
-		          word ? Tm::WORD_SRCH[m] : 0)) break;
+		int think = word ? Tm::WORD_SRCH[m] : 0;
+		if (!step(limit, timed, word ? 2 : 0, think)) break;
 		Type value;
 		Type col;
 		Type mask2;
@@ -2162,22 +2199,29 @@ EmuTime V9990CmdEngine::estimateCmdEnd() const
 	int64_t rect = ANX + int64_t(ANY - 1) * getWrappedNX();
 	int64_t left = 0; // in Tm's time units
 	switch (CMD >> 4) {
-	// (the least over all modes: 2 bits a pixel)
-	case 0x02: left = rect * 20; break; // LMMV
-	case 0x04: left = rect * 24; break; // LMMM
-	case 0x07: left = rect * 20; break; // CMMM
-	case 0x08: left = rect * 24; break; // BMXL
-	case 0x09: left = rect * 24; break; // BMLX
-	case 0x0A: left = int64_t(nbBytes) * 70; break; // BMLL
-	case 0x0B: left = int64_t(NX - ANX) * 120; break; // LINE
+	case 0x02: // LMMV
+	case 0x07: // CMMM
+		left = rect * Tm::MIN_PIXEL_LMMV;
+		break;
+	case 0x04: // LMMM
+	case 0x08: // BMXL
+	case 0x09: // BMLX
+		left = rect * Tm::MIN_PIXEL_COPY;
+		break;
+	case 0x0A: // BMLL
+		left = int64_t(nbBytes) * Tm::MIN_BYTE_BMLL;
+		break;
+	case 0x0B: // LINE
+		left = int64_t(NX - ANX) * Tm::MIN_PIXEL_LINE;
+		break;
 	case 0x0C: // SRCH: can end at any pixel
 	case 0x0E: // PSET
 		break;
 	default:
 		return engineTime; // ends at once, or when the CPU moves data
 	}
-	// (the pending step may cover up to 4 of those units)
-	left = std::max<int64_t>(0, left - 4 * 120);
+	// (the pending step may already cover some of that)
+	left = std::max<int64_t>(0, left - Tm::MAX_PENDING);
 	return std::max(nextDone, engineTime) + Tm::dur(left);
 }
 
